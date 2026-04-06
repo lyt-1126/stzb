@@ -73,7 +73,7 @@ func staticRoute(r *gin.Engine) {
 			return
 		}
 
-		if reqpath == "/data.html" || strings.HasPrefix(reqpath, "/assets/") {
+		if reqpath == "/data.html" || reqpath == "/favicon.ico" || strings.HasPrefix(reqpath, "/assets/") {
 			if tryServe(teamFS, teamServer) {
 				return
 			}

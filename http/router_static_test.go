@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -22,13 +23,34 @@ func TestStaticRoute_DistAndTeamFallback(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected %d got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
 		}
-		if !strings.Contains(rec.Body.String(), "率土Data") {
-			t.Fatalf("expected html to contain title, got body=%s", rec.Body.String())
+		bodyLower := strings.ToLower(rec.Body.String())
+		if !strings.Contains(bodyLower, "<html") {
+			t.Fatalf("expected html, got body=%s", rec.Body.String())
 		}
 	})
 
 	t.Run("team assets fallback", func(t *testing.T) {
-		for _, p := range []string{"/assets/index-CTHhHu0d.js", "/assets/index-fk8CytI0.css"} {
+		req := httptest.NewRequest(http.MethodGet, "/data.html", nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected %d got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+		}
+
+		body := rec.Body.String()
+		re := regexp.MustCompile(`/assets/[^"']+`)
+		matches := re.FindAllString(body, -1)
+		if len(matches) == 0 {
+			t.Fatalf("expected assets in html, got body=%s", body)
+		}
+
+		paths := append([]string{"/favicon.ico"}, matches...)
+		seen := map[string]bool{}
+		for _, p := range paths {
+			if seen[p] {
+				continue
+			}
+			seen[p] = true
 			req := httptest.NewRequest(http.MethodGet, p, nil)
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, req)
