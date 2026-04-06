@@ -2,5 +2,5 @@ package web
 
 import "embed"
 
-//go:embed dist
+//go:embed dist team
 var PublicAssets embed.FS
