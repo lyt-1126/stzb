@@ -6,3 +6,7 @@
 dist
 dist1
 *.zip
+graphify-out/
+.graphify_*.json
+.graphify_*.txt
+.trae
