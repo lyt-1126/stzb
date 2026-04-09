@@ -18,6 +18,10 @@ func ParseData(cmdId int, data []byte) {
 		log.Println("收到[" + strconv.Itoa(cmdId) + "]消息:" + string(parseZlibData(data)))
 	}
 
+	if model.Conn == nil {
+		return
+	}
+
 	if cmdId == 103 {
 		parseTeamUser(data)
 	} else if cmdId == 92 {

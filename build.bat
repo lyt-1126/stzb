@@ -1,32 +1,33 @@
 @echo off
+setlocal
 
-cd web
-echo ��ǰ����Ŀ¼: %cd%
-echo ��ʼ���ǰ��
+pushd web
+echo Current directory: %cd%
+echo Building web...
 
 call npm run build
 
-cd ../
-cd teamweb
+popd
+pushd teamweb
 echo Building teamweb...
 call npm run build
-cd ../
+popd
+
 echo Syncing teamweb dist to web\\team...
+if exist web\\team\\assets rmdir /s /q web\\team\\assets
 copy /Y teamweb\\dist\\index.html web\\team\\data.html >nul
 copy /Y teamweb\\dist\\favicon.ico web\\team\\favicon.ico >nul
 xcopy /Y /E /I teamweb\\dist\\assets web\\team\\assets >nul
 
-echo ��ǰ����Ŀ¼: %cd%
-echo ��ʼ������
+echo Current directory: %cd%
+echo Building Go executable...
 
-rem ���� dist Ŀ¼�����Ŀ¼�Ѵ�������Դ���
 mkdir dist 2>nul
 
-echo ��ʼ����windows 64λ
-rem ����Ϊ Windows 64 λ��ִ���ļ�
+echo Target: windows amd64
 set GOOS=windows
 set GOARCH=amd64
 go build -tags="nomsgpack" -ldflags="-s -w" -o dist\stzbHelper-windows-amd64.exe stzbHelper
 
-echo ������ɣ���ִ���ļ�������� dist Ŀ¼��
+echo Done. Output: dist\\stzbHelper-windows-amd64.exe
 pause

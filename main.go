@@ -8,14 +8,103 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"log"
+	"runtime"
 	"strconv"
 	"stzbHelper/global"
 	"stzbHelper/model"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-var databaseSelected bool = false
+var databaseSelected atomic.Bool
+
+type flowState struct {
+	mu sync.Mutex
+
+	waitbuf  bool
+	fullbuf  []byte
+	fullsize int
+
+	packetLoss bool
+	lossCmdId  int
+	lossBytes  []byte
+	needBufSize int
+
+	lastSeen time.Time
+}
+
+type flowStore struct {
+	mu    sync.Mutex
+	flows map[string]*flowState
+	ticks uint64
+}
+
+func newFlowStore() *flowStore {
+	return &flowStore{
+		flows: make(map[string]*flowState),
+	}
+}
+
+func (s *flowStore) get(key string) *flowState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.flows[key]
+	if ok {
+		return st
+	}
+	st = &flowState{}
+	s.flows[key] = st
+	return st
+}
+
+func (s *flowStore) cleanup(now time.Time, ttl time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, st := range s.flows {
+		st.mu.Lock()
+		last := st.lastSeen
+		st.mu.Unlock()
+		if !last.IsZero() && now.Sub(last) > ttl {
+			delete(s.flows, k)
+		}
+	}
+}
+
+var flows = newFlowStore()
+var flowTick uint64
+
+type parseJob struct {
+	cmdId int
+	data  []byte
+}
+
+var parseJobs chan parseJob
+
+func startParseWorkers(n int) {
+	if n <= 0 {
+		n = 1
+	}
+	parseJobs = make(chan parseJob, 512)
+	for i := 0; i < n; i++ {
+		go func() {
+			for job := range parseJobs {
+				ParseData(job.cmdId, job.data)
+			}
+		}()
+	}
+}
+
+func submitParse(cmdId int, data []byte) {
+	if parseJobs == nil {
+		return
+	}
+	cp := append([]byte(nil), data...)
+	select {
+	case parseJobs <- parseJob{cmdId: cmdId, data: cp}:
+	default:
+	}
+}
 
 func main() {
 	// 获取所有网络接口
@@ -41,8 +130,8 @@ func main() {
 	var wg sync.WaitGroup
 
 	//model.InitDB("database")
-	go StartHttpService(&wg)
-	wg.Add(1)
+	go StartHttpService()
+	startParseWorkers(maxInt(2, runtime.NumCPU()/2))
 	// 遍历所有接口并启动 Goroutine 监听
 	log.Println("stzbHelper开始运行!")
 	log.Println("version:", global.Version)
@@ -58,6 +147,13 @@ func main() {
 
 	// 等待所有 Goroutine 完成
 	wg.Wait()
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // captureTCPPackets 监听指定接口的 TCP 数据包
@@ -90,10 +186,6 @@ func captureTCPPackets(deviceName string, wg *sync.WaitGroup) {
 		handlePacket(packet)
 	}
 }
-
-var fullbuf = []byte{}
-var fullsize = 0
-var waitbuf = false
 
 func handlePacket(packet gopacket.Packet) {
 	if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
@@ -131,20 +223,30 @@ func handlePacket(packet gopacket.Packet) {
 				}
 			}
 
+			flowKey := srcIP + "->" + dstIP
+			st := flows.get(flowKey)
+			if atomic.AddUint64(&flowTick, 1)%5000 == 0 {
+				flows.cleanup(time.Now(), 2*time.Minute)
+			}
+			st.mu.Lock()
+			st.lastSeen = time.Now()
+
 			var buf []byte
 			if PSH != true {
-				waitbuf = true
-				fullbuf = append(fullbuf, payload...)
+				st.waitbuf = true
+				st.fullbuf = append(st.fullbuf, payload...)
+				st.mu.Unlock()
 				return
 			} else {
-				if waitbuf == true {
-					waitbuf = false
-					buf = append(fullbuf, payload...)
-					fullbuf = []byte{}
+				if st.waitbuf == true {
+					st.waitbuf = false
+					buf = append(st.fullbuf, payload...)
+					st.fullbuf = nil
 				} else {
 					buf = payload
 				}
 			}
+			st.mu.Unlock()
 
 			if global.IsDebug == true {
 				fmt.Println("")
@@ -169,12 +271,14 @@ func handlePacket(packet gopacket.Packet) {
 				if buf[12] == 3 {
 					//fmt.Println(len(buf), bufsize, cmdId, "-----------")
 					if len(buf)-bufsize != 4 && (cmdId == 103 || cmdId == 92) {
-						global.LossCmdId = cmdId
-						global.LossBytes = buf
-						global.PacketLoss = true
-						global.NeedBufSize = bufsize
+						st.mu.Lock()
+						st.lossCmdId = cmdId
+						st.lossBytes = append([]byte(nil), buf...)
+						st.packetLoss = true
+						st.needBufSize = bufsize
+						st.mu.Unlock()
 					} else {
-						go ParseData(cmdId, buf[17:])
+						submitParse(cmdId, buf[17:])
 					}
 
 				} else if buf[12] == 5 {
@@ -192,20 +296,34 @@ func handlePacket(packet gopacket.Packet) {
 					//if cmdId == 5028 {
 					//	Parse5028(buf[13:])
 					//}
-				} else if cmdId > 99999 && global.PacketLoss == true && (global.LossCmdId == 103 || global.LossCmdId == 92) {
-					result := make([]byte, len(buf)+len(global.LossBytes))
-					copy(result, global.LossBytes)
-					copy(result[len(global.LossBytes):], buf)
-					if len(buf)+len(global.LossBytes)-global.NeedBufSize != 4 {
-						global.LossBytes = result
-					} else {
-						global.PacketLoss = false
-						go ParseData(global.LossCmdId, result[17:])
+				} else if cmdId > 99999 {
+					st.mu.Lock()
+					packetLoss := st.packetLoss
+					lossCmdId := st.lossCmdId
+					lossBytes := append([]byte(nil), st.lossBytes...)
+					needBufSize := st.needBufSize
+					st.mu.Unlock()
+
+					if packetLoss && (lossCmdId == 103 || lossCmdId == 92) {
+						result := make([]byte, len(buf)+len(lossBytes))
+						copy(result, lossBytes)
+						copy(result[len(lossBytes):], buf)
+						if len(buf)+len(lossBytes)-needBufSize != 4 {
+							st.mu.Lock()
+							st.lossBytes = result
+							st.mu.Unlock()
+						} else {
+							st.mu.Lock()
+							st.packetLoss = false
+							st.lossBytes = nil
+							st.mu.Unlock()
+							submitParse(lossCmdId, result[17:])
+						}
 					}
 
 				}
 
-				if cmdId == 3686 && databaseSelected == false {
+				if cmdId == 3686 && databaseSelected.CompareAndSwap(false, true) {
 					var data []byte
 					if buf[12] == 5 {
 						data = []byte(DecodeType5(buf[12:]))
@@ -215,7 +333,8 @@ func handlePacket(packet gopacket.Packet) {
 					var raw []interface{}
 					err := json.Unmarshal([]byte(data), &raw)
 					if err != nil {
-						log.Fatal(err)
+						log.Println("主公簿数据解析失败:", err)
+						databaseSelected.Store(false)
 					} else {
 						dataMap := raw[1].(map[string]interface{})
 						server, ok := dataMap["server"].([]interface{})
@@ -235,8 +354,10 @@ func handlePacket(packet gopacket.Packet) {
 						global.OnlyDstIp = dstIP
 						dabesename := roleName + "_" + server[0].(string)
 						log.Println("收到主公簿数据，将打开数据库文件" + dabesename + ".db")
-						model.InitDB(dabesename)
-						databaseSelected = true
+						if err := model.InitDB(dabesename); err != nil {
+							log.Println("数据库初始化失败:", err)
+							databaseSelected.Store(false)
+						}
 					}
 				}
 			}
@@ -281,7 +402,7 @@ func (bb *Buffer) ReadInt() int {
 	return int(value)
 }
 
-func (bb *Buffer) ReadByte() byte {
+func (bb *Buffer) ReadU8() byte {
 	if bb.offset+1 > len(bb.Byte) {
 		return 0
 	}

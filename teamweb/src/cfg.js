@@ -1,4 +1,4 @@
-export const herocfg = `{
+export const herocfg = {
   "100001": {
     "iconId": 100001,
     "type": "弓",
@@ -3135,9 +3135,9 @@ export const herocfg = `{
     "country": "吴",
     "quality": 5
   }
-}`;
+};
 
-export const skillcfg = `{
+export const skillcfg = {
   "200001": {
     "type": "主动",
     "name": "衣带密诏",
@@ -6283,4 +6283,4 @@ export const skillcfg = `{
     "name": "土垒督战XP",
     "zfQuality": "B"
   }
-}`;
+};

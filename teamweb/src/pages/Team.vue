@@ -8,10 +8,8 @@ import * as XLSX from 'xlsx';
 
 const router = useRouter()
 
-const herocfg = JSON.parse(hcfg);
-const skillcfg = JSON.parse(scfg);
-
-console.log(herocfg[100762].iconId);
+const herocfg = hcfg;
+const skillcfg = scfg;
 
 const report = ref([]);
 const nextid = ref(0);

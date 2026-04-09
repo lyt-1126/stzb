@@ -6,10 +6,9 @@ import (
 	"io"
 	"log"
 	"stzbHelper/http"
-	"sync"
 )
 
-func StartHttpService(wait *sync.WaitGroup) {
+func StartHttpService() {
 	log.Println("HTTP服务启动")
 	gin.DefaultWriter = io.Discard
 	gin.SetMode(gin.ReleaseMode)
@@ -25,7 +24,6 @@ func StartHttpService(wait *sync.WaitGroup) {
 
 	if err != nil {
 		log.Fatal("http服务启动失败:" + err.Error())
-		wait.Done()
 		return
 	}
 }

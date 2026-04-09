@@ -1,17 +1,29 @@
 package api
 
 import (
-	"fmt"
 	"github.com/gin-gonic/gin"
 	"strconv"
 	"stzbHelper/global"
 	"stzbHelper/http/common"
 	"stzbHelper/model"
+	"gorm.io/gorm"
 )
 
+func dbOrError(c *gin.Context) (*gorm.DB, bool) {
+	if model.Conn == nil {
+		common.Response{Code: 503, Message: "数据库未初始化，请先在游戏中打开主公簿激活"}.Error(c)
+		return nil, false
+	}
+	return model.Conn, true
+}
+
 func GetTeamUser(c *gin.Context) {
+	db, ok := dbOrError(c)
+	if !ok {
+		return
+	}
 	var teamUsers []model.TeamUser
-	query := model.Conn
+	query := db
 	group := c.Query("group")
 	if group != "" {
 		query = query.Where("`group` = ?", group)
@@ -21,12 +33,20 @@ func GetTeamUser(c *gin.Context) {
 }
 
 func GetTeamGroup(c *gin.Context) {
+	db, ok := dbOrError(c)
+	if !ok {
+		return
+	}
 	var groups []string
-	model.Conn.Model(&model.TeamUser{}).Select("group").Distinct("group").Pluck("group", &groups)
+	db.Model(&model.TeamUser{}).Select("group").Distinct("group").Pluck("group", &groups)
 	common.Response{Data: groups}.Success(c)
 }
 
 func CreateTask(c *gin.Context) {
+	db, ok := dbOrError(c)
+	if !ok {
+		return
+	}
 	taskName := c.PostForm("taskname")
 	taskTime := c.PostForm("tasktime")
 	targetGroup := c.PostFormArray("targetgroup")
@@ -45,7 +65,7 @@ func CreateTask(c *gin.Context) {
 	}
 
 	var users []model.TeamUser
-	model.Conn.Where("`group` IN ?", targetGroup).Find(&users)
+	db.Where("`group` IN ?", targetGroup).Find(&users)
 	taskUserList := model.TeamUserListToTaskUserList(users)
 
 	if len(users) <= 0 {
@@ -64,7 +84,7 @@ func CreateTask(c *gin.Context) {
 		UserList:        taskUserList,
 	}
 
-	add := model.Conn.Create(&task)
+	add := db.Create(&task)
 
 	if add.RowsAffected != 0 {
 		common.Response{Message: "创建成功", Data: add.RowsAffected}.Success(c)
@@ -78,13 +98,21 @@ func CreateTask(c *gin.Context) {
 }
 
 func GetTaskList(c *gin.Context) {
+	db, ok := dbOrError(c)
+	if !ok {
+		return
+	}
 	var taskList []model.Task
 
-	model.Conn.Omit("user_list").Order("id DESC").Find(&taskList)
+	db.Omit("user_list").Order("id DESC").Find(&taskList)
 	common.Response{Data: taskList}.Success(c)
 }
 
 func DelTask(c *gin.Context) {
+	db, ok := dbOrError(c)
+	if !ok {
+		return
+	}
 	id := c.Param("tid")
 
 	idInt, err := strconv.Atoi(id)
@@ -93,7 +121,7 @@ func DelTask(c *gin.Context) {
 		return
 	}
 
-	action := model.Conn.Delete(&model.Task{}, idInt)
+	action := db.Delete(&model.Task{}, idInt)
 
 	if action.RowsAffected != 0 {
 		common.Response{Message: "删除成功", Data: action.RowsAffected}.Success(c)
@@ -137,6 +165,10 @@ func DisableGetBattleData(c *gin.Context) {
 }
 
 func GetReportNumByTaskId(c *gin.Context) {
+	db, ok := dbOrError(c)
+	if !ok {
+		return
+	}
 	tid := c.Param("tid")
 
 	if tid == "" {
@@ -153,12 +185,12 @@ func GetReportNumByTaskId(c *gin.Context) {
 
 	var task model.Task
 
-	query := model.Conn.Last(&task, tidint)
+	query := db.Last(&task, tidint)
 
 	if query.Error == nil {
 		var taskNum int64
 
-		model.Conn.Model(model.Report{}).Where(model.Report{Wid: task.Pos}).Count(&taskNum)
+		db.Model(model.Report{}).Where(model.Report{Wid: task.Pos}).Count(&taskNum)
 
 		common.Response{Data: gin.H{
 			"count": taskNum,
@@ -170,6 +202,10 @@ func GetReportNumByTaskId(c *gin.Context) {
 }
 
 func StatisticsReport(c *gin.Context) {
+	db, ok := dbOrError(c)
+	if !ok {
+		return
+	}
 	tid := c.Param("tid")
 
 	if tid == "" {
@@ -186,28 +222,28 @@ func StatisticsReport(c *gin.Context) {
 
 	var task model.Task
 
-	query := model.Conn.Last(&task, tidint)
+	query := db.Last(&task, tidint)
 	if query.Error == nil {
 		task.CompleteUserNum = 0
 		for id, t := range task.UserList {
 			var Num int64
-			model.Conn.Model(model.Report{}).Where(model.Report{Wid: task.Pos, AttackName: t.Name}).Count(&Num)
+			db.Model(model.Report{}).Where(model.Report{Wid: task.Pos, AttackName: t.Name}).Count(&Num)
 			//fmt.Print(t.Name, "总战报数量:", Num, " ")
 			//查询攻城次数
 			var AtkNum int64
-			model.Conn.Model(model.Report{}).Where(model.Report{Wid: task.Pos, AttackName: t.Name}).Where("garrison = ?", 0).Count(&AtkNum)
+			db.Model(model.Report{}).Where(model.Report{Wid: task.Pos, AttackName: t.Name}).Where("garrison = ?", 0).Count(&AtkNum)
 			//fmt.Print(t.Name, "主力次数:", AtkNum, " ")
 			//查询拆迁次数
 			var DisNum int64
-			model.Conn.Model(model.Report{}).Where(model.Report{Wid: task.Pos, AttackName: t.Name, Garrison: 1}).Count(&DisNum)
+			db.Model(model.Report{}).Where(model.Report{Wid: task.Pos, AttackName: t.Name, Garrison: 1}).Count(&DisNum)
 			//fmt.Println(t.Name, "拆迁次数:", DisNum)
 			//主力队伍数量
 			var AtkTeamNum int64
-			model.Conn.Model(model.Report{}).Where(model.Report{Wid: task.Pos, AttackName: t.Name}).Where("garrison = ?", 0).Group("attack_base_heroid").Count(&AtkTeamNum)
+			db.Model(model.Report{}).Where(model.Report{Wid: task.Pos, AttackName: t.Name}).Where("garrison = ?", 0).Group("attack_base_heroid").Count(&AtkTeamNum)
 			//fmt.Print(t.Name, "主力队伍数量:", AtkTeamNum, " ")
 			//拆迁队伍数量
 			var DisTeamNum int64
-			model.Conn.Model(model.Report{}).Where(model.Report{Wid: task.Pos, AttackName: t.Name, Garrison: 1}).Group("attack_base_heroid").Count(&DisTeamNum)
+			db.Model(model.Report{}).Where(model.Report{Wid: task.Pos, AttackName: t.Name, Garrison: 1}).Group("attack_base_heroid").Count(&DisTeamNum)
 			//fmt.Println(t.Name, "拆迁队伍数量:", DisTeamNum, " ")
 			task.UserList[id].AtkNum = int(AtkNum)
 			task.UserList[id].DisNum = int(DisNum)
@@ -217,7 +253,7 @@ func StatisticsReport(c *gin.Context) {
 				task.CompleteUserNum++
 			}
 		}
-		save := model.Conn.Save(&task)
+		save := db.Save(&task)
 		if save.RowsAffected != 0 {
 			common.Response{Message: "统计考勤数据成功", Data: save.RowsAffected}.Success(c)
 		} else {
@@ -234,6 +270,10 @@ func StatisticsReport(c *gin.Context) {
 }
 
 func GetTask(c *gin.Context) {
+	db, ok := dbOrError(c)
+	if !ok {
+		return
+	}
 	tid := c.Param("tid")
 
 	if tid == "" {
@@ -250,7 +290,7 @@ func GetTask(c *gin.Context) {
 
 	var task model.Task
 
-	query := model.Conn.Last(&task, tidint)
+	query := db.Last(&task, tidint)
 	//fmt.Println(task, query.Error)
 	if query.Error == nil {
 		common.Response{Data: task}.Success(c)
@@ -261,6 +301,10 @@ func GetTask(c *gin.Context) {
 }
 
 func GetGroupWu(c *gin.Context) {
+	db, ok := dbOrError(c)
+	if !ok {
+		return
+	}
 	type GroupWuStats struct {
 		Group       string `json:"group"`
 		MemberCount int    `json:"member_count"`
@@ -271,12 +315,12 @@ func GetGroupWu(c *gin.Context) {
 
 	var stats []GroupWuStats
 
-	subQuery := model.Conn.Model(&model.TeamUser{}).
+	subQuery := db.Model(&model.TeamUser{}).
 		Select("`group`, COUNT(*) as zero_wu_count").
 		Where("wu = 0").
 		Group("`group`")
 
-	err := model.Conn.Model(&model.TeamUser{}).
+	err := db.Model(&model.TeamUser{}).
 		Select("`team_user`.`group`, SUM(wu) as total_wu, ROUND(AVG(wu)) as average_wu, IFNULL(sub.zero_wu_count, 0) as zero_wu_count, COUNT(*) as member_count").
 		Joins("LEFT JOIN (?) as sub ON sub.`group` = `team_user`.`group`", subQuery).
 		Group("`team_user`.`group`").
@@ -292,6 +336,10 @@ func GetGroupWu(c *gin.Context) {
 }
 
 func DelTaskReport(c *gin.Context) {
+	db, ok := dbOrError(c)
+	if !ok {
+		return
+	}
 
 	tid := c.Param("tid")
 
@@ -309,10 +357,10 @@ func DelTaskReport(c *gin.Context) {
 
 	var task model.Task
 
-	query := model.Conn.Last(&task, tidint)
+	query := db.Last(&task, tidint)
 
 	if query.Error == nil {
-		action := model.Conn.Delete(&model.Report{}, "wid = ?", task.Pos)
+		action := db.Delete(&model.Report{}, "wid = ?", task.Pos)
 
 		if action.RowsAffected != 0 {
 			common.Response{Message: "清理战报成功", Data: action.RowsAffected}.Success(c)
@@ -334,6 +382,10 @@ func DelTaskReport(c *gin.Context) {
 }
 
 func ReportList(c *gin.Context) {
+	db, ok := dbOrError(c)
+	if !ok {
+		return
+	}
 	var reportList []model.BattleReport
 	nextid := c.Query("nextid")
 	atkname := c.Query("atkname")
@@ -344,103 +396,104 @@ func ReportList(c *gin.Context) {
 	stype := c.Query("type")
 	nonpc := c.Query("nonpc")
 	//no0army := c.Query("no0army")
-	query := model.Conn.Limit(30).Order("time DESC")
+	query := db.Limit(30).Order("time DESC")
 	if nextid != "" {
 		nexidInt, err := strconv.Atoi(nextid)
 		if err != nil {
 			return
 		}
 		if nexidInt > 0 {
-			query.Where("id < ?", nexidInt)
+			query = query.Where("id < ?", nexidInt)
 		}
 	} else {
 		common.Response{Message: "参数错误"}.Error(c)
+		return
 	}
 
 	if stype == "1" || stype == "" {
 		if atkname != "" {
-			query.Where("attack_name LIKE ? OR defend_name LIKE ?", "%"+atkname+"%", "%"+atkname+"%")
+			query = query.Where("attack_name LIKE ? OR defend_name LIKE ?", "%"+atkname+"%", "%"+atkname+"%")
 		}
 
 		if atkunionname != "" {
-			query.Where("attack_union_name LIKE ? OR defend_union_name LIKE ?", "%"+atkunionname+"%", "%"+atkunionname+"%")
+			query = query.Where("attack_union_name LIKE ? OR defend_union_name LIKE ?", "%"+atkunionname+"%", "%"+atkunionname+"%")
 		}
 
 		if atkhp != "" {
-			query.Where("attack_hp >= ? OR defend_hp >= ?", atkhp, atkhp)
+			query = query.Where("attack_hp >= ? OR defend_hp >= ?", atkhp, atkhp)
 		}
 
 		if atklevel != "" {
-			query.Where("(attack_hero1_level >= ? AND attack_hero2_level >= ? AND attack_hero3_level >= ?) OR (defend_hero1_level >= ? AND defend_hero2_level >= ? AND defend_hero3_level >= ?)", atklevel, atklevel, atklevel, atklevel, atklevel, atklevel)
+			query = query.Where("(attack_hero1_level >= ? AND attack_hero2_level >= ? AND attack_hero3_level >= ?) OR (defend_hero1_level >= ? AND defend_hero2_level >= ? AND defend_hero3_level >= ?)", atklevel, atklevel, atklevel, atklevel, atklevel, atklevel)
 		}
 
 		if atkstar != "" {
-			query.Where("attack_total_star >= ? OR defend_total_star >= ?", atkstar, atkstar)
+			query = query.Where("attack_total_star >= ? OR defend_total_star >= ?", atkstar, atkstar)
 		}
 	} else if stype == "2" {
 		if atkname != "" {
-			query.Where("attack_name LIKE ?", "%"+atkname+"%")
+			query = query.Where("attack_name LIKE ?", "%"+atkname+"%")
 		}
 
 		if atkunionname != "" {
-			query.Where("attack_union_name LIKE", "%"+atkunionname+"%")
+			query = query.Where("attack_union_name LIKE ?", "%"+atkunionname+"%")
 		}
 
 		if atkhp != "" {
-			query.Where("attack_hp >= ?", atkhp)
+			query = query.Where("attack_hp >= ?", atkhp)
 		}
 
 		if atklevel != "" {
-			query.Where("(attack_hero1_level >= ? AND attack_hero2_level >= ? AND attack_hero3_level >= ?)", atklevel, atklevel, atklevel)
+			query = query.Where("(attack_hero1_level >= ? AND attack_hero2_level >= ? AND attack_hero3_level >= ?)", atklevel, atklevel, atklevel)
 		}
 
 		if atkstar != "" {
-			query.Where("attack_total_star >= ?", atkstar)
+			query = query.Where("attack_total_star >= ?", atkstar)
 		}
 	} else if stype == "3" {
 		if atkname != "" {
-			query.Where("defend_name LIKE ?", "%"+atkname+"%")
+			query = query.Where("defend_name LIKE ?", "%"+atkname+"%")
 		}
 
 		if atkunionname != "" {
-			query.Where("defend_union_name LIKE", "%"+atkunionname+"%")
+			query = query.Where("defend_union_name LIKE ?", "%"+atkunionname+"%")
 		}
 
 		if atkhp != "" {
-			query.Where("defend_hp >= ?", atkhp)
+			query = query.Where("defend_hp >= ?", atkhp)
 		}
 
 		if atklevel != "" {
-			query.Where("(defend_hero1_level >= ? AND defend_hero2_level >= ? AND defend_hero3_level >= ?)", atklevel, atklevel, atklevel)
+			query = query.Where("(defend_hero1_level >= ? AND defend_hero2_level >= ? AND defend_hero3_level >= ?)", atklevel, atklevel, atklevel)
 		}
 
 		if atkstar != "" {
-			query.Where("defend_total_star >= ?", atkstar)
+			query = query.Where("defend_total_star >= ?", atkstar)
 		}
 	} else if stype == "4" {
 		if atkname != "" {
-			query.Where("attack_name LIKE ? OR defend_name LIKE ?", "%"+atkname+"%", "%"+atkname+"%")
+			query = query.Where("attack_name LIKE ? OR defend_name LIKE ?", "%"+atkname+"%", "%"+atkname+"%")
 		}
 
 		if atkunionname != "" {
-			query.Where("attack_union_name LIKE ? OR defend_union_name LIKE ?", "%"+atkunionname+"%", "%"+atkunionname+"%")
+			query = query.Where("attack_union_name LIKE ? OR defend_union_name LIKE ?", "%"+atkunionname+"%", "%"+atkunionname+"%")
 		}
 
 		if atkhp != "" {
-			query.Where("attack_hp >= ? AND defend_hp >= ?", atkhp, atkhp)
+			query = query.Where("attack_hp >= ? AND defend_hp >= ?", atkhp, atkhp)
 		}
 
 		if atklevel != "" {
-			query.Where("(attack_hero1_level >= ? AND attack_hero2_level >= ? AND attack_hero3_level >= ?) AND (defend_hero1_level >= ? AND defend_hero2_level >= ? AND defend_hero3_level >= ?)", atklevel, atklevel, atklevel, atklevel, atklevel, atklevel)
+			query = query.Where("(attack_hero1_level >= ? AND attack_hero2_level >= ? AND attack_hero3_level >= ?) AND (defend_hero1_level >= ? AND defend_hero2_level >= ? AND defend_hero3_level >= ?)", atklevel, atklevel, atklevel, atklevel, atklevel, atklevel)
 		}
 
 		if atkstar != "" {
-			query.Where("attack_total_star >= ? AND defend_total_star >= ?", atkstar, atkstar)
+			query = query.Where("attack_total_star >= ? AND defend_total_star >= ?", atkstar, atkstar)
 		}
 	}
 
 	if nonpc == "1" {
-		query.Where("npc = 0")
+		query = query.Where("npc = 0")
 	}
 
 	//query.Where("npc = 0")
@@ -449,7 +502,7 @@ func ReportList(c *gin.Context) {
 
 	var count int64
 
-	model.Conn.Model(&model.BattleReport{}).Count(&count)
+	db.Model(&model.BattleReport{}).Count(&count)
 
 	common.Response{Data: gin.H{
 		"report": reportList,
@@ -461,6 +514,10 @@ func ReportList(c *gin.Context) {
 }
 
 func GetPlayerTeam(c *gin.Context) {
+	db, ok := dbOrError(c)
+	if !ok {
+		return
+	}
 	name := c.Query("atkname")
 	uname := c.Query("atkunionname")
 	idu := c.Query("idu")
@@ -525,9 +582,9 @@ func GetPlayerTeam(c *gin.Context) {
 			AND attack_hero2_level >= 15
 			AND attack_hero3_level >= 15
 			AND attack_hp >= 10000
-			AND attack_name LIKE '%` + name + `%'
-			AND attack_union_name LIKE '%` + uname + `%'
-			AND attack_idu LIKE '%` + idu + `%'
+			AND attack_name LIKE ?
+			AND attack_union_name LIKE ?
+			AND attack_idu LIKE ?
 			AND npc = 0
 			AND all_skill_info != "" AND all_skill_info IS NOT NULL 
 	
@@ -567,9 +624,9 @@ func GetPlayerTeam(c *gin.Context) {
 			AND defend_hero2_level >= 15
 			AND defend_hero3_level >= 15
 			AND defend_hp >= 10000
-			AND defend_name LIKE '%` + name + `%'
-			AND defend_union_name LIKE '%` + uname + `%'
-			AND defend_idu LIKE '%` + idu + `%'
+			AND defend_name LIKE ?
+			AND defend_union_name LIKE ?
+			AND defend_idu LIKE ?
 			AND npc = 0
 			AND all_skill_info != "" AND all_skill_info IS NOT NULL 
 	),
@@ -629,10 +686,13 @@ WHERE
     dedup_rn = 1
 ORDER BY 
     player_name, time DESC;`
-	fmt.Println(model.Conn.Raw(query).Scan(&results).Error) // 自动映射到结构体
-
-	// 使用结果
-	fmt.Println("找到记录:", len(results))
+	likeName := "%" + name + "%"
+	likeUname := "%" + uname + "%"
+	likeIdu := "%" + idu + "%"
+	if err := db.Raw(query, likeName, likeUname, likeIdu, likeName, likeUname, likeIdu).Scan(&results).Error; err != nil {
+		common.Response{Message: "查询失败", Data: err.Error()}.Error(c)
+		return
+	}
 
 	common.Response{Data: results}.Success(c)
 }
